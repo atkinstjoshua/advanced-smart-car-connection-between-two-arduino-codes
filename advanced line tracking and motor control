@@ -1,1 +1,221 @@
+#include <Servo.h>
+
+const int PIN_MOTOR_STBY = 3;
+const int PIN_MOTOR_PWMA = 5;
+const int PIN_MOTOR_PWMB = 6;
+const int PIN_MOTOR_AIN  = 7;
+const int PIN_MOTOR_BIN  = 8;
+
+const int PIN_SENSOR_L = A2;
+const int PIN_SENSOR_M = A1;
+const int PIN_SENSOR_R = A0;
+
+const int PIN_SERVO = 10;
+
+// Communication from fan Arduino
+const int PIN_OBSTACLE_SIGNAL = 11;
+
+const int LINE_THRESHOLD = 400;
+const int END_THRESHOLD  = 1000;
+const int SPEED          = 50;
+const int TURN_SPEED     = 75;
+
+const int SWEEP_MIN = 0;
+const int SWEEP_MAX = 180;
+const float SWEEP_SPEED_DPS = 150.0;
+
+enum Side { SIDE_LEFT, SIDE_RIGHT };
+
+Side lastTurn = SIDE_RIGHT;
+Side searchSide = SIDE_RIGHT;
+
+bool searching = false;
+
+Servo sweepServo;
+
+float sweepAngle = 90.0;
+int sweepDirection = 1;
+
+unsigned long lastSweepUpdate = 0;
+
+void updateSweep() {
+  unsigned long now = millis();
+  unsigned long elapsed = now - lastSweepUpdate;
+
+  if (elapsed == 0) {
+    return;
+  }
+
+  lastSweepUpdate = now;
+
+  sweepAngle += sweepDirection * SWEEP_SPEED_DPS * elapsed / 1000.0;
+
+  if (sweepAngle >= SWEEP_MAX) {
+    sweepAngle = SWEEP_MAX;
+    sweepDirection = -1;
+  } else if (sweepAngle <= SWEEP_MIN) {
+    sweepAngle = SWEEP_MIN;
+    sweepDirection = 1;
+  }
+
+  sweepServo.write((int)sweepAngle);
+}
+
+void setMotor(int pwmPin, int dirPin, int speed) {
+  digitalWrite(dirPin, speed >= 0 ? HIGH : LOW);
+
+  analogWrite(pwmPin, constrain(abs(speed), 0, 255));
+}
+
+void drive(int motorBSpeed, int motorASpeed) {
+  digitalWrite(PIN_MOTOR_STBY, HIGH);
+
+  setMotor(PIN_MOTOR_PWMB, PIN_MOTOR_BIN, motorBSpeed);
+  setMotor(PIN_MOTOR_PWMA, PIN_MOTOR_AIN, motorASpeed);
+}
+
+void forward(int x) {
+  drive(x, x);
+}
+
+void turnLeft(int x) {
+  drive(-x, x);
+}
+
+void turnRight(int x) {
+  drive(x, -x);
+}
+
+void stopMotors() {
+  analogWrite(PIN_MOTOR_PWMA, 0);
+  analogWrite(PIN_MOTOR_PWMB, 0);
+
+  digitalWrite(PIN_MOTOR_AIN, LOW);
+  digitalWrite(PIN_MOTOR_BIN, LOW);
+}
+
+void setup() {
+  pinMode(PIN_MOTOR_STBY, OUTPUT);
+  pinMode(PIN_MOTOR_PWMA, OUTPUT);
+  pinMode(PIN_MOTOR_PWMB, OUTPUT);
+  pinMode(PIN_MOTOR_AIN, OUTPUT);
+  pinMode(PIN_MOTOR_BIN, OUTPUT);
+
+  // Receive signal from fan Arduino
+  pinMode(PIN_OBSTACLE_SIGNAL, INPUT_PULLUP);
+
+  sweepServo.attach(PIN_SERVO);
+  sweepServo.write((int)sweepAngle);
+
+  lastSweepUpdate = millis();
+
+  Serial.begin(9600);
+
+  digitalWrite(PIN_MOTOR_STBY, HIGH);
+}
+
+void loop() {
+  updateSweep();
+
+  int rawL = analogRead(PIN_SENSOR_L);
+  int rawM = analogRead(PIN_SENSOR_M);
+  int rawR = analogRead(PIN_SENSOR_R);
+
+  bool L = rawL > LINE_THRESHOLD;
+  bool M = rawM > LINE_THRESHOLD;
+  bool R = rawR > LINE_THRESHOLD;
+
+  const char* msg;
+
+  // PRIORITY 1: Stop if the other Arduino detects an obstacle
+  if (digitalRead(PIN_OBSTACLE_SIGNAL) == LOW) {
+
+    stopMotors();
+    searching = false;
+
+    msg = "OBSTACLE DETECTED - STOP";
+
+  }
+
+  // PRIORITY 2: Existing end-mark detection
+  else if (rawM > END_THRESHOLD) {
+
+    stopMotors();
+    searching = false;
+
+    msg = "END MARK - STOP";
+
+  }
+
+  // PRIORITY 3: Original line-following program
+  else if (searching) {
+
+    if (M) {
+      searching = false;
+      forward(SPEED);
+
+      msg = "LINE REACQUIRED";
+
+    } else if (searchSide == SIDE_LEFT) {
+
+      turnLeft(TURN_SPEED);
+      msg = "TURNING LEFT";
+
+    } else {
+
+      turnRight(TURN_SPEED);
+      msg = "TURNING RIGHT";
+    }
+
+  } else if (L) {
+
+    turnLeft(TURN_SPEED);
+    lastTurn = SIDE_LEFT;
+
+    msg = "LEFT";
+
+  } else if (M) {
+
+    forward(SPEED);
+
+    msg = "FORWARD";
+
+  } else if (R) {
+
+    turnRight(TURN_SPEED);
+    lastTurn = SIDE_RIGHT;
+
+    msg = "RIGHT";
+
+  } else {
+
+    searching = true;
+    searchSide = lastTurn;
+
+    if (searchSide == SIDE_LEFT) {
+
+      turnLeft(TURN_SPEED);
+      msg = "LOST - TURNING LEFT";
+
+    } else {
+
+      turnRight(TURN_SPEED);
+      msg = "LOST - TURNING RIGHT";
+    }
+  }
+
+  Serial.print("L:");
+  Serial.print(rawL);
+
+  Serial.print(" M:");
+  Serial.print(rawM);
+
+  Serial.print(" R:");
+  Serial.print(rawR);
+
+  Serial.print(" -> ");
+  Serial.println(msg);
+
+  delay(10);
+}
 
