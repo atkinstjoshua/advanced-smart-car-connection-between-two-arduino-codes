@@ -1,0 +1,118 @@
+#define ECHO_PIN 11
+#define TRIG_PIN 12
+#define LED_PIN 13
+#define FAN_PIN 9
+#define STOP_SIGNAL_PIN 5
+
+const int fanDistance = 25;
+const int fanSpeed = 64;
+const int kickSpeed = 255;
+const unsigned long kickTime = 150;
+const unsigned long readingInterval = 100;
+const int maxTries = 3;
+const int farConfirm = 2;
+
+bool fanOn = false;
+int farCount = 0;
+bool ledState = false;
+
+long readDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 25000);
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  return duration / 58;
+}
+
+long measure() {
+  for (int i = 0; i < maxTries; i++) {
+    long d = readDistance();
+
+    if (d > 0) {
+      return d;
+    }
+
+    delay(20);
+  }
+
+  return -1;
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(FAN_PIN, OUTPUT);
+  pinMode(STOP_SIGNAL_PIN, OUTPUT);
+
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(STOP_SIGNAL_PIN, HIGH);
+
+  analogWrite(FAN_PIN, 0);
+
+  Serial.println("Ultrasonic sensor ready");
+}
+
+void loop() {
+  ledState = !ledState;
+  digitalWrite(LED_PIN, ledState);
+
+  long distance = measure();
+
+  if (distance > 0) {
+
+    Serial.print("Distance: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+
+    if (distance <= fanDistance) {
+
+      farCount = 0;
+
+      if (!fanOn) {
+        fanOn = true;
+
+        // Immediately tell the car to stop
+        digitalWrite(STOP_SIGNAL_PIN, LOW);
+
+        analogWrite(FAN_PIN, kickSpeed);
+        delay(kickTime);
+      }
+
+      analogWrite(FAN_PIN, fanSpeed);
+
+      Serial.println("Fan ON (25%)");
+
+    } else {
+
+      farCount++;
+
+      if (farCount >= farConfirm) {
+        fanOn = false;
+        analogWrite(FAN_PIN, 0);
+
+        Serial.println("Fan OFF");
+      }
+    }
+
+  } else {
+
+    Serial.println("Reading missed - fan state held");
+  }
+
+  // LOW = Stop car
+  // HIGH = Allow car to move
+  digitalWrite(STOP_SIGNAL_PIN, fanOn ? LOW : HIGH);
+
+  delay(readingInterval);
+}
